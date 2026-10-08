@@ -1,0 +1,76 @@
+"""The only module touching SciQLop's private docking (the main window's QtAds dock manager).
+
+Adapted from sciqlop_vdf.ui.dock (same teardown order: takeWidget -> hide -> deleteLater -> closeDockWidget,
+needed to avoid a QRhiWidget use-after-free in floating windows).
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+
+import PySide6QtAds as QtAds
+from PySide6.QtCore import QObject, QTimer, Signal
+
+log = logging.getLogger(__name__)
+SPLIT_FRACTION = 0.35  # share of the panel+dock width given to the dock
+
+
+def _default_manager():
+    from SciQLop.user_api.gui import get_main_window
+    from SciQLop.user_api.threading import unwrap
+    return unwrap(get_main_window()).dock_manager
+
+
+class MPDock(QObject):
+    """GUI thread only. `closed` fires when the user clicks the dock's × (not on close())."""
+    closed = Signal()
+
+    def __init__(self, widget, title: str, beside: str | None, manager=None):
+        super().__init__()
+        self._mgr = manager if manager is not None else _default_manager()
+        self._done = False
+        self._doc = QtAds.CDockWidget(title)
+        self._doc.setObjectName(f"tracers-mp-{uuid.uuid4().hex}")  # QtAds keys docks by object name
+        widget.destroyed.connect(self._on_content_destroyed)
+        self._doc.setWidget(widget, QtAds.CDockWidget.ForceNoScrollArea)
+        self._doc.setFeature(QtAds.CDockWidget.CustomCloseHandling, True)
+        self._doc.setFeature(QtAds.CDockWidget.DockWidgetDeleteOnClose, True)
+        self._doc.closeRequested.connect(self.closed.emit)
+        target = self._mgr.findDockWidget(beside) if beside else None
+        target_area = target.dockAreaWidget() if target is not None else None
+        self.placed_beside = target_area is not None
+        if self.placed_beside:
+            area = self._mgr.addDockWidget(QtAds.DockWidgetArea.RightDockWidgetArea, self._doc, target_area)
+            QTimer.singleShot(0, lambda: self._split(area))
+        else:
+            self._mgr.addDockWidget(QtAds.DockWidgetArea.RightDockWidgetArea, self._doc)
+
+    def _on_content_destroyed(self, *_):
+        if not self._done:
+            self._done = True
+            self.closed.emit()
+
+    def _split(self, area) -> None:
+        if self._done:
+            return
+        try:
+            sizes = list(self._mgr.splitterSizes(area))
+        except RuntimeError:
+            return
+        if len(sizes) == 2 and sum(sizes) > 0:
+            total = sum(sizes)
+            right = int(SPLIT_FRACTION * total)
+            self._mgr.setSplitterSizes(area, [total - right, right])
+
+    def close(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        try:
+            w = self._doc.takeWidget()
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+            self._doc.closeDockWidget()
+        except RuntimeError:
+            log.debug("MP dock already gone")
