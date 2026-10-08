@@ -13,6 +13,9 @@ authors = [{ name = "Nicolas Aunai" }]
 requires-python = ">=3.12"
 dependencies = ["numpy", "scipy", "speasy", "geopack"]
 
+[project.urls]
+Repository = "https://github.com/nicolasaunai/sciqlop-tracers-mp"
+
 [project.entry-points."sciqlop.plugins"]
 sciqlop_tracers_mp = "sciqlop_tracers_mp.plugin"
 
